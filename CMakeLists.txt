@@ -1,3 +1,4 @@
+# Minimum CMake version required
 cmake_minimum_required(VERSION 3.17)
 
 # Project Definition
@@ -6,8 +7,20 @@ project(ChatServer VERSION 1.0 LANGUAGES CXX)
 # Compiler Settings
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+# Enable folders in Visual Studio project organization
 set_property(GLOBAL PROPERTY USE_FOLDERS ON)
 set_property(GLOBAL PROPERTY VS_STARTUP_PROJECT ${PROJECT_NAME})
+
+# Platform-Specific Configurations
+if(WIN32)
+    cmake_policy(SET CMP0156 NEW)
+    add_definitions(-D_WIN32_WINNT=0x0601)
+    add_definitions(-DGLFW_INCLUDE_NONE -DWIN32_LEAN_AND_MEAN -DNOMINMAX)
+elseif(UNIX AND NOT APPLE)
+    message(STATUS "Configuring for Linux...")
+    add_definitions(-DGLFW_INCLUDE_NONE)
+endif()
 
 # Include Directories
 include_directories(
@@ -20,7 +33,8 @@ include_directories(
     ${CMAKE_SOURCE_DIR}/include/glfw/include
 )
 
-# ImGui Sources
+# Source Files
+file(GLOB_RECURSE PROJECT_SOURCES ${CMAKE_SOURCE_DIR}/source/*.cpp ${CMAKE_SOURCE_DIR}/source/*.h)
 set(IMGUI_SOURCES
     ${CMAKE_SOURCE_DIR}/include/imgui/imgui.cpp
     ${CMAKE_SOURCE_DIR}/include/imgui/imgui_draw.cpp
@@ -29,13 +43,6 @@ set(IMGUI_SOURCES
     ${CMAKE_SOURCE_DIR}/include/imgui/imgui_impl_glfw.cpp
     ${CMAKE_SOURCE_DIR}/include/imgui/imgui_impl_opengl3.cpp
 )
-
-# Project Sources
-file(GLOB_RECURSE PROJECT_SOURCES
-    ${CMAKE_SOURCE_DIR}/source/*.cpp
-    ${CMAKE_SOURCE_DIR}/source/*.h
-)
-
 set(SOURCES ${PROJECT_SOURCES} ${IMGUI_SOURCES})
 
 # Main Executable
@@ -48,7 +55,6 @@ if(UNIX AND NOT APPLE)
     find_package(PkgConfig)
     if(NOT PkgConfig_FOUND)
         message(WARNING "pkg-config not found! Attempting to install it...")
-
         execute_process(
             COMMAND bash -c "if [ -x \"$(command -v apt-get)\" ]; then \
                                   sudo apt-get update && \
@@ -60,25 +66,18 @@ if(UNIX AND NOT APPLE)
                                   exit 1; \
                               fi"
         )
-
-        # Retry finding PkgConfig after installation
         find_package(PkgConfig REQUIRED)
     endif()
 endif()
 
 if(WIN32)
     find_package(OpenGL REQUIRED)
-    target_link_libraries(${PROJECT_NAME}
-        OpenGL::GL
-        Threads::Threads
-    )
+    target_link_libraries(${PROJECT_NAME} OpenGL::GL Threads::Threads)
+    target_link_options(${PROJECT_NAME} PRIVATE /NODEFAULTLIB:MSVCRT)
 elseif(UNIX AND NOT APPLE)
-    # Attempt to find OpenGL and fallback to manual setup if needed
     find_package(OpenGL)
     if(NOT OPENGL_FOUND)
-        message(WARNING "OpenGL not found! Attempting to install it...")
-
-        # Install OpenGL dependencies
+        message(WARNING "Attempting to load dependencies...")
         execute_process(
             COMMAND bash -c "if [ -x \"$(command -v apt-get)\" ]; then \
                                   sudo apt-get update && \
@@ -91,8 +90,6 @@ elseif(UNIX AND NOT APPLE)
                                   exit 1; \
                               fi"
         )
-
-        # Manually locate OpenGL libraries after installation
         set(OPENGL_gl_LIBRARY /usr/lib/x86_64-linux-gnu/libGL.so)
         set(OPENGL_glx_LIBRARY /usr/lib/x86_64-linux-gnu/libGLX.so)
         if(EXISTS ${OPENGL_gl_LIBRARY} AND EXISTS ${OPENGL_glx_LIBRARY})
@@ -101,14 +98,11 @@ elseif(UNIX AND NOT APPLE)
             message(FATAL_ERROR "OpenGL installation failed. Please check manually.")
         endif()
     endif()
-
-    # Locate and include GLFW
     find_package(PkgConfig REQUIRED)
     pkg_check_modules(GLFW REQUIRED glfw3)
     include_directories(${GLFW_INCLUDE_DIRS})
     link_directories(${GLFW_LIBRARY_DIRS})
     add_definitions(${GLFW_CFLAGS_OTHER})
-
     target_link_libraries(${PROJECT_NAME}
         ${GLFW_LIBRARIES}
         ${OPENGL_gl_LIBRARY}
@@ -118,9 +112,7 @@ elseif(UNIX AND NOT APPLE)
 endif()
 
 # Output Directories
-set_target_properties(${PROJECT_NAME} PROPERTIES
-    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
-)
+set_target_properties(${PROJECT_NAME} PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
 if(WIN32)
     set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
@@ -130,34 +122,25 @@ if(WIN32)
     )
 endif()
 
-# Define resource paths
+# Resource Copying
 set(FONT_DIR "${CMAKE_SOURCE_DIR}/Fonts")
 set(CONFIG_FILE "${CMAKE_SOURCE_DIR}/config.ini")
-
-# Define the output directory (binary directory)
 set(BIN_DIR "${CMAKE_BINARY_DIR}/bin")
 set(FONT_OUTPUT_DIR "${BIN_DIR}/Fonts")
 
-# Ensure Fonts directory exists
-add_custom_command(
-    TARGET ${PROJECT_NAME} POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E make_directory
-    ${FONT_OUTPUT_DIR}
+add_custom_target(CopyResources ALL
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${FONT_OUTPUT_DIR}
+    COMMAND ${CMAKE_COMMAND} -E copy_directory ${FONT_DIR} ${FONT_OUTPUT_DIR}
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${CONFIG_FILE} ${BIN_DIR}
 )
+add_dependencies(${PROJECT_NAME} CopyResources)
 
-# Copy font files to bin/Fonts directory
-file(GLOB FONT_FILES "${FONT_DIR}/*")
-foreach(file ${FONT_FILES})
-    add_custom_command(
-        TARGET ${PROJECT_NAME} POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        ${file} ${FONT_OUTPUT_DIR}
-    )
-endforeach()
+# Suppress Batch Verbosity
+set(CMAKE_VERBOSE_MAKEFILE OFF)
 
-# Copy config.ini to bin directory
-add_custom_command(
-    TARGET ${PROJECT_NAME} POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        ${CONFIG_FILE} ${BIN_DIR}
-)
+# Compiler Flags
+if(MSVC)
+    target_compile_options(${PROJECT_NAME} PRIVATE /W4)
+else()
+    target_compile_options(${PROJECT_NAME} PRIVATE -Wall -Wextra)
+endif()
